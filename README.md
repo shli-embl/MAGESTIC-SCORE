@@ -29,6 +29,7 @@ cd 1_outcome_precalling
 ls inputs/
 ```
 file 1. gRNA_list.txt: 
+```
 \#column 1: sample id, column 2: gRNA sequence
 MAGESTIC_REDI_1	CTCCTCAGTTTGTCCACGGT
 MAGESTIC_REDI_10	AGAGGAAGTCTCAACGGCAG
@@ -36,7 +37,7 @@ MAGESTIC_REDI_100	ATACTGGCCACGTTTGACAA
 MAGESTIC_REDI_1000	TTGTGATTTTATTGATTCTG
 MAGESTIC_REDI_1001	GGTAACAAAGTCACGGCTCC
 ...
-
+```
 
 #### Pipeline 2: Target site sequence and genomic feature annotations
 #### Pipeline 3: Machine learning model construction and tuning
