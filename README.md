@@ -75,14 +75,14 @@ snakemake --profile profile
 
 ### Pipeline 2: Target site sequence and genomic feature annotations
 For a given list of PAM sites (and gRNA sequences), our pipeline 2 outputs a full list of annotations that are used for constructing the predictive model used in Pipeline 3. These annotations includes target sequence features, chromatin accessibility, histone modification, as well as the customized sequence repetitiveness metrics (and more details about feature list can be found in our publication). 
-#### 1a. Prepare annotation files
+#### 2a. Prepare annotation files
 Run the script to download pre-processed annotation files for the SCORE model (yeast chromatin, histone modification data). Please find the information about how the processed data were generated from 2_target_list_annotation/readmeplease.txt. 
 ```
 cd 2_target_list_annotation/
 sh download_annotation.sh
 ```
 
-#### 1b. Modify the configuration files
+#### 2b. Modify the configuration files
 ```
 ls inputs/
 ```
@@ -109,7 +109,7 @@ MAGESTIC_REDI_1000	chr10	+	92631	TTGTGATTTTATTGATTCTG
 MAGESTIC_REDI_1001	chr6	+	20768	GGTAACAAAGTCACGGCTCC
 ```
 
-#### 1c. Run pipeline
+#### 2c. Run pipeline
 We use a HPC cluster for computing the task, for which the configuration of job submission and control are saved in profile/config.yaml. 
 ```
 cd 2_target_list_annotation/
@@ -118,9 +118,7 @@ snakemake --profile profile
 
 ### Pipeline 3: Machine learning model construction and tuning
 We use the R caret package to perform model searching across a number of hyperparameters: 1) ML algorithms (gradient-boosted trees, random forest, L1- or L2-regularized regressions; 2) Hyperparamters within each ML algorithm (e.g. tree number ...); 3) Feature subsets (target sequence, chromatin context and genomic repetitiveness); 4) Data imbalance treatment (over- or down-sampling, with SMOTE or ADASYN). Repeated k-fold cross validation was used to assess the model performance. 
-
-### Pipeline 4: Bulk whole-genome sequencing analysis for structral variant characterizations
-#### 1a. Modify the configuration files
+#### 3a. Modify the configuration files
 file 1. input.yaml (required by snakemake for locating file paths):
 ```
 ---
@@ -140,8 +138,53 @@ MAGESTIC_REDI_1001	1	0	0	0
 MAGESTIC_REDI_1002	0	0	0	0
 MAGESTIC_REDI_1003	0	0	0	0
 ```
-file 3. combined_features.txt (feature table obtained from Pipeline 2, with additional columns in the end to assign editing system and variant type as correction factors)
+file 3. combined_features.txt (feature table obtained from Pipeline 2, with additional columns in the end to assign editing system and variant type as correction factors):
 ```
 id	ATACseq_ins_freq	bp_to_telomere	bp_to_centromere	norm_distance_to_telomere	H2AK5ac	H2AS129ph	H3K4ac	H3K4me	H3K4me2	H3K4me3	H3K9ac	H3K14ac	H3K18ac	H3K23ac	H3K27ac	H3K36meH3K36me2	H3K36me3	H3K56ac	H3K79me	H3K79me3	H3S10ph	H4K5ac	H4K8ac	H4K12ac	H4K15acH4K20me	H4R3me	H4R3me2s	HTZ1	IGR100	IGR1000	IGR10000	IGR50	IGR500	IGR5000	ILR100	ILR1000	ILR10000	ILR50	ILR500	ILR5000	m0	m1	m2	m3	T_score	target_sequence_30mer	Transcription_Cas9_bind_template_strand	Transcription_Cas9_bind_non_template_strand	TRL2500x2	TRL250x2	TRL25x2	TRL5000x2	TRL500x2	TRL50x2	Editing_system_1	Editing_system_2	Editing_system_3	variant_type_SNV	variant_type_INDEL	variant_type_MNV
 MAGESTIC_REDI_1	3.06	104423	1163	0.989	0.571911931	-1.413944272	1.82410521	-1.913294733	-1.06959095	2.134772687	1.647827909	1.381763726	2.527676605	1.081172126	0.557087315	-0.340625001	-0.460996809	-0.281504667	1.408581249	0.038505213	-0.193029944	0.632719882	0.000316058	-0.412611799	-0.306177367	-0.719997155	-1.018213765	-0.464537889	-1.073701456	-0.6606927	0.005	0.135	0.048	0	0.013	0.086	-0.00110.0166	0.0122	-0.0114	0.0314	0.0089	1	0	0	0	3.5	ATTTCCTCCTCAGTTTGTCCACGGTGGGTT	-5.644	9.1	17	10	0	21	17	6	1	0	0	0	0	1
+```
+#### 3b. Run pipeline
+We use a HPC cluster for computing the task, for which the configuration of job submission and control are saved in profile/config.yaml. 
+```
+cd 3_model_training/
+snakemake --profile profile
+```
+
+### Pipeline 4: Bulk whole-genome sequencing analysis for structral variant characterizations
+We used bulk DNA sequencing to infer the composition of SVs vs. normal edits in a list of predicted difficult-to-edit loci in yeast genome. Pipeline 4 composes of the processing of raw .fastq reads and the quantification of coverage depth in the regions of interest. 
+#### 4a. Modify the configuration files
+file 1. samples.txt (list of individual bulk WGS sample):
+```
+sample	editing_system	read1fq	read2fq	variant	variant_upstream	variant_downstream	known_outcome	guide_donor_plasmid	guide_donor_plasmid_version	editing_system_plasmid	barcoding_locusplot_window
+locus_LD_1_Cas9_LexA_rep_1	Cas9_LexA	/g/steinmetz/project/yeast_crispr/REDI/STF_spike_in_WGS/raw_data/STF_SV_editing_final/20220325_MAGESTIC_3_SV_CSM_HIS_5FC_outgrowth_rep_2_Tn5/fastq/20220422_Tn5_plate_2A_sample_25_R1.fastq.gz;/g/steinmetz/project/yeast_crispr/REDI/STF_spike_in_WGS/raw_data/STF_SV_editing_final/20220325_MAGESTIC_3_SV_CSM_HIS_5FC_outgrowth_rep_2_Tn5_reseq/fastq/20220805_Tn5_plate_2A_sample_25_R1.fastq.gz	/g/steinmetz/project/yeast_crispr/REDI/STF_spike_in_WGS/raw_data/STF_SV_editing_final/20220325_MAGESTIC_3_SV_CSM_HIS_5FC_outgrowth_rep_2_Tn5/fastq/20220422_Tn5_plate_2A_sample_25_R2.fastq.gz;/g/steinmetz/project/yeast_crispr/REDI/STF_spike_in_WGS/raw_data/STF_SV_editing_final/20220325_MAGESTIC_3_SV_CSM_HIS_5FC_outgrowth_rep_2_Tn5_reseq/fastq/20220805_Tn5_plate_2A_sample_25_R2.fastq.gz	chr8_287671_AGGTGG_GAATTC	TACCAACAA	AAGCAAAGT	3832-bp deletion	pS1399	v0	pKR373	yKR889	chr8:283500-293500
+```
+file 2. input.yaml (required by snakemake for locating file paths):
+```
+---
+samplesheet: 'inputs/samples.txt'
+genome: 'inputs/fasta/yeast_reference.fa'
+guide_donor_plasmids: 'inputs/fasta/all_guide_donor_editing_plasmid.fa'
+variants: 'inputs/variants.txt'
+tmp_dir: './tmpdir'
+region: 'inputs/regions.bed'
+output_dir: './output'
+```
+file 3. variants.txt (the wild type and mutated genotypes for each variant):
+```
+variant	variant_upstream	variant_downstream	plot_window
+chr8_287671_AGGTGG_GAATTC	TACCAACAA	AAGCAAAGT	chr8:283500-293500
+chr3_249330_GATCCTGA_AATTCGCT	AATCCGCCG	ACCTCCAAA	chr3:249100-249600
+chr4_1161885_CCTTGG_GAATTC	AGCGTAGCC	AGAAGCATA	chr4:1157000-1167000
+chr7_111607_ACAAGG_GAATTC	AGCAGAAAT	ATTTATAAT	chr7:106000-116000
+chr15_1070807_ACCAATG_GCCAATA	AAACATGCG	GGTCAAAAT	chr15:1069800-1071800
+chr8_5782_CCCAGA_GAATTC	TGGTGATTA	TGTCATGCA	chr8:0-10000
+chr14_751267_TTCTG_AATTC	GACAACCAG	GAACCCAGA	chr14:746000-756000
+chr1_27356_TAATA_AATTC	CAGTCCCTG	TTATCAGGG	chr1:22000-32000
+chr9_435817_CCTG_GGAT	AATTTTTGG	CCTCACTAT	chr9:429800-439800
+```
+#### 4b. Run pipeline
+We use a HPC cluster for computing the task, for which the configuration of job submission and control are saved in profile/config.yaml. 
+```
+cd 4_bulk_wgs_analysis/
+snakemake --profile profile
 ```
