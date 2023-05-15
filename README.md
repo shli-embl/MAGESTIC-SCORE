@@ -71,7 +71,6 @@ MAGESTIC_REDI_10	AGAGGAAGTCTCAACGGCAGNNN	chr4	1503979	AGAGGAAGTCTCAgCaGCAGAGG	+	
 MAGESTIC_REDI_10	AGAGGAAGTCTCAACGGCAGNNN	chr4	1503853	AGAaGAAaTCTCAACaGCAGAGG	+	3
 ...
 ```
-<br>
 #### 1b. Run pipeline
 We use a HPC cluster for computing the task, for which the configuration of job submission and control are saved in profile/config.yaml. 
 ```
