@@ -1,0 +1,10 @@
+---
+targetsheet: 'inputs/targets.txt'
+genome: 'inputs/fasta/yeast_reference.fa'
+tmp_dir: './tmpdir'
+output_dir: './output'
+atac_seq_bed: 'inputs/data/lin_all.merge.ins.bedgraph'
+centromere_coords: 'inputs/data/yeast_CEN.coords'
+transcription_forward_strand: 'inputs/data/WT.polyA.forward.depth'
+transcription_reverse_strand: 'inputs/data/WT.polyA.reverse.depth'
+hist_mod_list: 'inputs/data/histone_modification_binned_bed_files.txt'

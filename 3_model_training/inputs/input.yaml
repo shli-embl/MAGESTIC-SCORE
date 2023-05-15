@@ -1,0 +1,5 @@
+---
+observed_outcome: 'inputs/edit_outcome.txt'
+feature_table: 'inputs/combined_features.txt'
+tmp_dir: './tmpdir'
+output_dir: './output'

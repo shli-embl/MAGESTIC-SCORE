@@ -1,0 +1,285 @@
+import os
+import pandas as pd
+
+configfile: "inputs/input.yaml"
+units = pd.read_table(config["samplesheet"], dtype=str).set_index(["sample"], drop=False)
+units2 = pd.read_table(config["variants"], dtype=str).set_index(["variant"], drop=False)
+SAMPLES = units.index.get_level_values('sample').unique().tolist()
+VARIANTS = units2.index.get_level_values('variant').unique().tolist()
+TMPDIR = config["tmp_dir"]
+RESULTDIR = config["output_dir"]
+
+def get_read1(wildcards):
+    if len(units.loc[wildcards.sample,"read1fq"].split(";"))==1:
+        return units.loc[wildcards.sample,"read1fq"]
+    else:
+        return units.loc[wildcards.sample,"read1fq"].split(";")[int(wildcards.subfile)]
+
+def get_read2(wildcards):
+    if len(units.loc[wildcards.sample,"read2fq"].split(";"))==1:
+        return units.loc[wildcards.sample,"read2fq"]
+    else:
+        return units.loc[wildcards.sample,"read2fq"].split(";")[int(wildcards.subfile)]
+
+def get_bam(wildcards):
+    if len(units.loc[wildcards.sample,"read1fq"].split(";"))==1:
+        return TMPDIR + "/" + wildcards.sample + ".part0.sort.bam"
+    else:
+        return expand(TMPDIR + "/" + wildcards.sample + ".part{subfile}.sort.bam",subfile = list(range(0,len(units.loc[wildcards.sample,"read1fq"].split(";")))))
+
+def get_custom_fasta(wildcards):
+    return config["genome"] + "." + units.loc[wildcards.sample,"guide_donor_plasmid"] + "_" + units.loc[wildcards.sample,"guide_donor_plasmid_version"] + "_" + units.loc[wildcards.sample,"editing_system_plasmid"] + "_" + units.loc[wildcards.sample,"barcoding_locus"] + ".fa"
+
+def get_custom_fasta_index(wildcards):
+    return config["genome"] + "." + units.loc[wildcards.sample,"guide_donor_plasmid"] + "_" + units.loc[wildcards.sample,"guide_donor_plasmid_version"] + "_" + units.loc[wildcards.sample,"editing_system_plasmid"] + "_" + units.loc[wildcards.sample,"barcoding_locus"] + ".fa.bwt"
+
+def get_custom_fasta_fai(wildcards):
+    return config["genome"] + "." + units.loc[wildcards.sample,"guide_donor_plasmid"] + "_" + units.loc[wildcards.sample,"guide_donor_plasmid_version"] + "_" + units.loc[wildcards.sample,"editing_system_plasmid"] + "_" + units.loc[wildcards.sample,"barcoding_locus"] + ".fa.fai"
+
+def get_custom_fasta_dict(wildcards):
+    return config["genome"] + "." + units.loc[wildcards.sample,"guide_donor_plasmid"] + "_" + units.loc[wildcards.sample,"guide_donor_plasmid_version"] + "_" + units.loc[wildcards.sample,"editing_system_plasmid"] + "_" + units.loc[wildcards.sample,"barcoding_locus"] + ".dict"
+
+def rchop(s, suffix):
+    if suffix and s.endswith(suffix):
+        return s[:-len(suffix)]
+    return s
+
+onstart:
+    print("##### Creating profile pipeline #####\n") 
+    print("\t Creating jobs output subfolders...\n")
+    shell("mkdir -p jobs/all")
+    shell("mkdir -p jobs/indexgenome")
+    shell("mkdir -p jobs/makecustomgenome")
+    shell("mkdir -p jobs/cutadapt")
+    shell("mkdir -p jobs/bwamem")
+    shell("mkdir -p jobs/sortbam")
+    shell("mkdir -p jobs/markduplicate")
+    shell("mkdir -p jobs/indexbam_result")
+    shell("mkdir -p jobs/indexbam_temp")
+    shell("mkdir -p jobs/indexfasta")
+    shell("mkdir -p jobs/BQSR")
+    shell("mkdir -p jobs/generateMapStats")
+    shell("mkdir -p jobs/generateDepth")
+    shell("mkdir -p jobs/countGenotype")
+    shell("mkdir -p jobs/catGenotypeCounts")
+    shell("mkdir -p jobs/extractReads")
+    shell("mkdir -p jobs/remapReads")
+    shell("mkdir -p jobs/summaryRemap")
+
+rule all:
+    input:
+        expand(RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",sample = SAMPLES),
+        expand(RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam.bai",sample = SAMPLES),
+        expand(RESULTDIR + "/stats/" + "{sample}.flagstat",sample = SAMPLES),
+        expand(RESULTDIR + "/depth/" + "{sample}.depth",sample = SAMPLES),
+        expand(RESULTDIR + "/bam/" + "{sample}.remap.sort.bam",sample = SAMPLES),
+        expand(RESULTDIR + "/bam/" + "{sample}.remap.sort.bam.bai",sample = SAMPLES),
+        RESULTDIR + "/gt_counts_all.txt",
+        RESULTDIR + "/Remap_counts_LD2.txt"
+
+rule indexgenome:
+    input:
+        "{fasta}"
+    output:
+        "{fasta}.bwt"
+    threads: 1
+    shell:
+        "bwa index {input}"
+
+rule makecustomgenome:
+    input:
+        genome = config["genome"],
+        plasmids = config["guide_donor_plasmids"]
+    output:
+        config["genome"] + ".{guide_donor}_{version}_{editing_plasmid}_{barcode_locus}.fa"
+    threads: 1
+    params:
+        chrnames = ",".join(expand("chr{num}",num = list(range(1, 16))))
+    shell:
+        "./perl/make_custom_genome_fasta.pl -in1 {input.genome} -in2 {input.plasmids} -out {output} -inc_chr {params.chrnames},{wildcards.guide_donor}_{wildcards.version},{wildcards.editing_plasmid},{wildcards.barcode_locus},yeast_2_micron"
+
+rule cutadapt:
+    input:
+        read1 = get_read1,
+        read2 = get_read2
+    output:
+        read1 = temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.r1.fastq"),
+        read2 = temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.r2.fastq")
+    threads: 8
+    params:
+        adapters = "-g AGATGTGTATAAGAGACAG -G AGATGTGTATAAGAGACAG -a CTGTCTCTTATACACATCT -A CTGTCTCTTATACACATCT -g TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG -G TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG -a CTGTCTCTTATACACATCTGACGCTGCCGACGA -A CTGTCTCTTATACACATCTGACGCTGCCGACGA -g GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG -G GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG -a CTGTCTCTTATACACATCTCCGAGCCCACGAGAC -A CTGTCTCTTATACACATCTCCGAGCCCACGAGAC "
+    shell:
+        "cutadapt {params.adapters} -j {threads} -o {output.read1} -p {output.read2} -q 20 --trim-n -m 20 --max-n=0 {input.read1} {input.read2}"
+
+rule bwamem:
+    input:
+        read1 = TMPDIR + "/" + "{sample}.part{subfile}.r1.fastq",
+        read2 = TMPDIR + "/" + "{sample}.part{subfile}.r2.fastq",
+        genome = get_custom_fasta,
+        index = get_custom_fasta_index
+    output:
+        temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.bam")
+    threads: 8
+    shell:
+        "bwa mem -t {threads} {input.genome} -R \"@RG\\tID:{wildcards.sample}.{wildcards.subfile}\\tSM:{wildcards.sample}\\tPL:illumina\\tLB:{wildcards.sample}\\tPU:{wildcards.sample}.{wildcards.subfile}\" {input.read1} {input.read2} | samtools view -bS > {output}"
+
+rule sortbam:
+    input:
+        TMPDIR + "/" + "{sample}.part{subfile}.bam",
+    output:
+        temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.sort.bam")
+    threads: 1
+    shell:
+        "gatk SortSam -I {input} -O {output} -SO coordinate --VALIDATION_STRINGENCY SILENT"
+
+rule markduplicate:
+    input:
+        get_bam
+    output:
+        bam = temp(TMPDIR + "/" + "{sample}.sort.dedup.bam"),
+        metrics = temp(TMPDIR + "/" + "{sample}.metrics")
+    threads: 1
+    params:
+        lambda wildcards: " ".join(expand(" -I {inputs} ",inputs = get_bam(wildcards)))
+    shell:
+        "gatk MarkDuplicates {params} -O {output.bam} -M {output.metrics} --VALIDATION_STRINGENCY SILENT"
+
+rule indexbam_result:
+    input:
+        RESULTDIR + "/bam/" + "{sample}.bam"
+    output:
+        RESULTDIR + "/bam/" + "{sample}.bam.bai"
+    threads: 1
+    shell:
+        "samtools index {input}"
+
+rule indexbam_temp:
+    input:
+        TMPDIR + "/" + "{sample}.bam"
+    output:
+        temp(TMPDIR + "/" + "{sample}.bam.bai")
+    threads: 1
+    shell:
+        "samtools index {input}"
+
+rule indexfasta:
+    input:
+        "{sample}.fa"
+    output:
+        "{sample}.fa.fai",
+        "{sample}.dict"
+    threads: 1
+    shell:
+        "samtools faidx {input} && "
+        "gatk CreateSequenceDictionary -R {input}"
+
+rule BQSR:
+    input:
+        bam = TMPDIR + "/" + "{sample}.sort.dedup.bam",
+        bai = TMPDIR + "/" + "{sample}.sort.dedup.bam.bai",
+        genome = get_custom_fasta,
+        fai = get_custom_fasta_fai,
+        dict = get_custom_fasta_dict
+    output:
+        vcf1 = temp(TMPDIR + "/" + "{sample}.recal1.vcf"),
+        idx1 = temp(TMPDIR + "/" + "{sample}.recal1.vcf.idx"),
+        vcf2 = temp(TMPDIR + "/" + "{sample}.recal2.vcf"),
+        idx2 = temp(TMPDIR + "/" + "{sample}.recal2.vcf.idx"),
+        table1 = temp(TMPDIR + "/" + "{sample}.recal1.table"),
+        table2 = temp(TMPDIR + "/" + "{sample}.recal2.table"),
+        bam1 = temp(TMPDIR + "/" + "{sample}.sort.dedup.recal1.bam"),
+        bai1 = temp(TMPDIR + "/" + "{sample}.sort.dedup.recal1.bai"),
+        bam2 = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",
+        bai2 = temp(RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bai")
+    threads: 1
+    shell:
+        "gatk HaplotypeCaller -R {input.genome} -I {input.bam} -ploidy 1 -O {output.vcf1} && "
+        "gatk BaseRecalibrator -R {input.genome} -I {input.bam} -O {output.table1} --known-sites {output.vcf1} && "
+        "gatk ApplyBQSR -R {input.genome} -I {input.bam} -O {output.bam1} -bqsr {output.table1} && "
+        "gatk HaplotypeCaller -R {input.genome} -I {output.bam1} -ploidy 1 -O {output.vcf2} && "
+        "gatk BaseRecalibrator -R {input.genome} -I {output.bam1} -O {output.table2} --known-sites {output.vcf2} && "
+        "gatk ApplyBQSR -R {input.genome} -I {output.bam1} -O {output.bam2} -bqsr {output.table2}"
+
+rule generateMapStats:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam.bai"
+    output:
+        flagstat = RESULTDIR + "/stats/" + "{sample}.flagstat"
+    threads: 1
+    shell:
+        "samtools flagstat {input.bam} > {output.flagstat}"
+
+rule generateDepth:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam.bai"
+    output:
+        depth = RESULTDIR + "/depth/" + "{sample}.depth"
+    params:
+        window = config["region"]
+    threads: 1
+    shell:
+        "samtools depth -a -b {params.window} {input.bam} > {output}"
+
+rule countGenotype:
+    input: 
+        bam = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam"
+    output:
+        out = temp(TMPDIR + "/" + "{sample}.{variant}.gt_count.txt")
+    params:
+        left = lambda wildcards: units2.loc[wildcards.variant,"variant_upstream"],
+        right = lambda wildcards: units2.loc[wildcards.variant,"variant_downstream"],
+    threads: 1
+    shell:
+        "perl perl/count_genotype.pl -bam {input.bam} -variant {wildcards.variant} -up {params.left} -down {params.right} -out {output.out}"
+
+rule catGenotypeCounts:
+    input:
+        expand(TMPDIR + "/" + "{sample}.{variant}.gt_count.txt",sample = SAMPLES,variant = VARIANTS)
+    output:
+        RESULTDIR + "/gt_counts_all.txt"
+    threads: 1
+    shell:
+        "cat {input} | grep -v \"#\" > {output}"
+
+rule extractReads:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam.bai"
+    output:
+#        fastq1 = temp(TMPDIR + "/" + "{sample}.1.fq"),
+#        fastq2 = temp(TMPDIR + "/" + "{sample}.2.fq")
+        fastq = temp(TMPDIR + "/" + "{sample}.fq")
+    threads: 1
+    params:
+        region = "chr3:249310-249355"
+    shell:
+        "perl perl/extract_reads.pl -bam {input.bam} -region {params.region} -out " + TMPDIR + "/{wildcards.sample}"
+
+rule remapReads:
+    input:
+#        fq1 = TMPDIR + "/" + "{sample}.1.fq",
+#        fq2 = TMPDIR + "/" + "{sample}.2.fq",
+        fq = TMPDIR + "/" + "{sample}.fq",
+        genome = "inputs/fasta/LD_2_template.fa",
+        index = "inputs/fasta/LD_2_template.fa.bwt"
+    output:
+        bam = temp(RESULTDIR + "/bam/" + "{sample}.remap.bam"),
+        sortbam = RESULTDIR + "/bam/" + "{sample}.remap.sort.bam"
+    threads: 1
+    shell:
+        "bwa mem -t 1 {input.genome} -R \"@RG\\tID:{wildcards.sample}\\tSM:{wildcards.sample}\\tPL:illumina\\tLB:{wildcards.sample}\\tPU:{wildcards.sample}\" {input.fq} | samtools view -bS > {output.bam} && "
+        "gatk SortSam -I {output.bam} -O {output.sortbam} -SO coordinate --VALIDATION_STRINGENCY SILENT"
+
+rule summaryRemap:
+    input:
+        expand(RESULTDIR + "/bam/" + "{sample}.remap.sort.bam",sample = SAMPLES)
+    output:
+        RESULTDIR + "/Remap_counts_LD2.txt"
+    threads: 1
+    params:
+        bam = lambda wildcards: ";".join(expand("{sample}.remap.sort.bam",sample = SAMPLES)),
+        dir = RESULTDIR + "/bam/"
+    shell:
+        "perl perl/count_genotype_LD2.pl -dir {params.dir} -bam \"{params.bam}\" -out {output}"

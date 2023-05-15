@@ -1,0 +1,131 @@
+import os
+import pandas as pd
+
+configfile: "inputs/input.yaml"
+RESULTDIR = config["output_dir"]
+TMPDIR = config["tmp_dir"]
+
+onstart:
+    print("##### Creating profile pipeline #####\n") 
+    print("\t Creating jobs output subfolders...\n")
+    shell("mkdir -p jobs/all")
+    shell("mkdir -p jobs/prepareFeatureTable")
+    shell("mkdir -p jobs/trainGBM")
+    shell("mkdir -p jobs/gridsearchGBM")
+    shell("mkdir -p jobs/trainGBM")
+    shell("mkdir -p jobs/trainGLMNET")
+    shell("mkdir -p jobs/trainRF")
+    shell("mkdir -p jobs/gridsearchGBM")
+    shell("mkdir -p jobs/gridsearchGLMNET")
+    shell("mkdir -p jobs/gridsearchRF")
+
+rule all:
+    input:
+        RESULTDIR + "/" + "model_gbm_gridsearch.txt",
+        RESULTDIR + "/" + "model_glmnet_gridsearch.txt",
+        RESULTDIR + "/" + "model_rf_gridsearch.txt"
+        RESULTDIR + "/" + "input_feature_table.txt"
+
+rule prepareFeatureTable:
+    input:
+        eo = config["observed_outcome"],
+        ft = config["feature_table"]
+    output:
+        ftfil = RESULTDIR + "/" + "input_feature_table.txt"
+    threads: 1
+    shell:
+        "./R/feature_table_preparation.R -i {input.ft} -e {input.eo} -o {output.ftfil}"
+
+rule gridsearchGBM:
+    input:
+        txt = expand(TMPDIR + "/" + "gbm_{metric}.{outcome}.{fset}.{method}.sz{size}.shr{shrinkage}.int{intdepth}.ntr{ntrees}.txt", outcome = ["Editing_outcome_NE","Editing_outcome_SV","Editing_outcome_LD","Editing_outcome_NRecT"], fset = ["fset1","fset2","fset3","fset12","fset23","fset13","fset123"], method = ["us","usos","ussmote","usadasyn"], metric = ["Accuracy"], size = [0.1,0.2,0.5,1], shrinkage = [0.1,0.01,0.001],intdepth = [1,2,3],ntrees = [100,200,500,1000])
+    output:
+        txt = RESULTDIR + "/" + "model_gbm_gridsearch.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR,
+        outcome = "Editing_outcome_NE,Editing_outcome_SV,Editing_outcome_LD,Editing_outcome_NRecT",
+        fset = "fset1,fset2,fset3,fset12,fset13,fset23,fset123",
+        method = "us,usos,ussmote,usadasyn",
+        metric = "Accuracy",
+        size = "0.1,0.2,0.5,1",
+        shrinkage = "0.1,0.01,0.001",
+        intdepth = "1,2,3",
+        ntrees = "100,200,500,1000"
+    shell:
+        "./R/gridsearch.R -i {params.workdir} --model gbm --features \"{params.fset}\" --outcome \"{params.outcome}\" --method \"{params.method}\" --metric \"{params.metric}\" --size \"{params.size}\" --shrinkage \"{params.shrinkage}\" --intdepth \"{params.intdepth}\" --ntrees \"{params.ntrees}\" -o {output}"
+
+rule gridsearchGLMNET:
+    input:
+        txt = expand(TMPDIR + "/" + "glmnet_{metric}.{outcome}.{fset}.{method}.sz{size}.alp{alpha}.lam{lbd}.txt", outcome = ["Editing_outcome_NE","Editing_outcome_SV","Editing_outcome_LD","Editing_outcome_NRecT"], fset = ["fset1","fset2","fset3","fset12","fset23","fset13","fset123"], method = ["us","usos","ussmote","usadasyn"], metric = ["Accuracy"], size = [0.1,0.2,0.5,1], alpha = [0,1], lbd = [0.0005,0.001,0.005,0.01,0.05,0.1,0.5,1,5,10,50,100,500,1000])
+    output:
+        txt = RESULTDIR + "/" + "model_glmnet_gridsearch.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR,
+        outcome = "Editing_outcome_NE,Editing_outcome_SV,Editing_outcome_LD,Editing_outcome_NRecT",
+        fset = "fset1,fset2,fset3,fset12,fset13,fset23,fset123",
+        method = "us,usos,ussmote,usadasyn",
+        metric = "Accuracy",
+        size = "0.1,0.2,0.5,1",
+        alpha = "0,1",
+        lbd = "0.0005,0.001,0.005,0.01,0.05,0.1,0.5,1,5,10,50,100,500,1000"
+    shell:
+        "./R/gridsearch.R -i {params.workdir} --model glmnet --features \"{params.fset}\" --outcome \"{params.outcome}\" --method \"{params.method}\" --metric \"{params.metric}\" --size \"{params.size}\" --alpha \"{params.alpha}\" --lambda \"{params.lbd}\" -o {output}"
+
+rule gridsearchRF:
+    input:
+        txt = expand(TMPDIR + "/" + "rf_{metric}.{outcome}.{fset}.{method}.sz{size}.ntr{ntrees}.mtr{mtry}.txt", outcome = ["Editing_outcome_NE","Editing_outcome_SV","Editing_outcome_LD","Editing_outcome_NRecT"], fset = ["fset1","fset2","fset3","fset12","fset23","fset13","fset123"], method = ["us","usos","ussmote","usadasyn"], metric = ["Accuracy"], size = [0.1,0.2,0.5,1], ntrees = [100,200,500,1000,2000],mtry = [1,2,4,8,16])
+    output:
+        txt = RESULTDIR + "/" + "model_rf_gridsearch.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR,
+        outcome = "Editing_outcome_NE,Editing_outcome_SV,Editing_outcome_LD,Editing_outcome_NRecT",
+        fset = "fset1,fset2,fset3,fset12,fset13,fset23,fset123",
+        method = "us,usos,ussmote,usadasyn",
+        metric = "Accuracy",
+        size = "0.1,0.2,0.5,1",
+        ntrees = "100,200,500,1000,2000",
+        mtry = "1,2,4,8,16"
+    shell:
+        "./R/gridsearch.R -i {params.workdir} --model rf --features \"{params.fset}\" --outcome \"{params.outcome}\" --method \"{params.method}\" --metric \"{params.metric}\" --size \"{params.size}\" --rfntrees \"{params.ntrees}\" --mtry \"{params.mtry}\" -o {output}"
+
+rule trainGBM:
+    input:
+        txt = RESULTDIR + "/" + "input_feature_table.txt",
+        fset = "inputs/{fset}.txt"
+    output:
+        txt = temp(TMPDIR + "/" + "gbm_{metric}.{outcome}.{fset}.{method}.sz{size}.shr{shrinkage}.int{intdepth}.ntr{ntrees}.txt")
+    params:
+        repeats = 5,
+        cv = 3
+    threads: 1
+    shell:
+        "./R/model_training.R -i {input.txt} -f {input.fset} --model gbm --outcome {wildcards.outcome} --method {wildcards.method} --metric {wildcards.metric} --size {wildcards.size} --shrinkage {wildcards.shrinkage} --intdepth {wildcards.intdepth} --ntrees {wildcards.ntrees} --cv {params.cv} --repeats {params.repeats} -o {output.txt}"
+
+rule trainGLMNET:
+    input:
+        txt = RESULTDIR + "/" + "input_feature_table.txt",
+        fset = "inputs/{fset}.txt"
+    output:
+        txt = temp(TMPDIR + "/" + "glmnet_{metric}.{outcome}.{fset}.{method}.sz{size}.alp{alpha}.lam{lambda}.txt")
+    params:
+        repeats = 5,
+        cv = 3
+    threads: 1
+    shell:
+        "./R/model_training.R -i {input.txt} -f {input.fset} --model glmnet --outcome {wildcards.outcome} --method {wildcards.method} --metric {wildcards.metric} --size {wildcards.size} --alpha {wildcards.alpha} --lambda {wildcards.lambda} --cv {params.cv} --repeats {params.repeats} -o {output.txt}"
+
+rule trainRF:
+    input:
+        txt = RESULTDIR + "/" + "input_feature_table.txt",
+        fset = "inputs/{fset}.txt"
+    output:
+        txt = temp(TMPDIR + "/" + "rf_{metric}.{outcome}.{fset}.{method}.sz{size}.ntr{ntrees}.mtr{mtry}.txt")
+    params:
+        repeats = 5,
+        cv = 3
+    threads: 1
+    shell:
+        "./R/model_training.R -i {input.txt} -f {input.fset} --model rf --outcome {wildcards.outcome} --method {wildcards.method} --metric {wildcards.metric} --size {wildcards.size} --rfntrees {wildcards.ntrees} --mtry {wildcards.mtry} --cv {params.cv} --repeats {params.repeats} -o {output.txt}"

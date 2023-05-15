@@ -1,0 +1,8 @@
+---
+samplesheet: 'inputs/samples.txt'
+genome: 'inputs/fasta/yeast_reference.fa'
+guide_donor_plasmids: 'inputs/fasta/all_guide_donor_editing_plasmid.fa'
+variants: 'inputs/variants.txt'
+tmp_dir: './tmpdir'
+region: 'inputs/regions.bed'
+output_dir: './output'

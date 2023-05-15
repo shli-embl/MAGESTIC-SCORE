@@ -1,0 +1,7 @@
+---
+samplesheet: 'inputs/samples.txt'
+grna: 'inputs/gRNA_list.txt'
+genome: 'inputs/fasta/yeast_reference.fa'
+tmp_dir: '/tmpdir'
+output_dir: './output'
+offtar: 'inputs/off_target.txt'

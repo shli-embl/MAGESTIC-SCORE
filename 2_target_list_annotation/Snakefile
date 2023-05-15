@@ -1,0 +1,350 @@
+import os
+import pandas as pd
+
+configfile: "inputs/input.yaml"
+units = pd.read_table(config["targetsheet"], dtype=str).set_index(["sample"], drop=False)
+SAMPLES = units.index.get_level_values('sample').unique().tolist()
+TMPDIR = config["tmp_dir"]
+RESULTDIR = config["output_dir"]
+
+### load bed list of histone modifications
+hist = pd.read_table(config["hist_mod_list"], dtype=str).set_index(["histone_modification"], drop = False)
+HISTMODS = hist.index.get_level_values('histone_modification').unique().tolist()
+
+### the T score calculation code was adapted from Kevin Roy's py script
+def get_T_score(guide):
+    guide_seq = guide + 'gtttaagagc'.upper()
+    T_count = 0
+    GA_bonus = 0.0
+    highest_T_score = 0
+    for idx in range(len(guide) + 1):
+        for idx2 in range(idx + 1,len(guide_seq) + 1):
+            window = guide_seq[idx:idx2]
+            T_count = window.count('T')
+            if window[0] == 'T' and window[-1] == 'T':
+                if T_count == (idx2 - idx - 1):
+                    T_count -= 0.5
+                    if guide_seq[idx2] in 'GA':
+                        T_count += GA_bonus
+                elif T_count == (idx2 - idx - 2):
+                    T_count -= 2.5
+                    if guide_seq[idx2] in 'GA':
+                        T_count += GA_bonus
+                elif T_count == (idx2 - idx):
+                    if guide_seq[idx2] in 'GA':
+                        T_count += GA_bonus
+                else:
+                    T_count = 0
+                if T_count > highest_T_score:
+                    highest_T_score = T_count   
+    return highest_T_score
+
+def rchop(s, suffix):
+    if suffix and s.endswith(suffix):
+        return s[:-len(suffix)]
+    return s
+
+onstart:
+    print("##### Creating profile pipeline #####\n") 
+    print("\t Creating jobs output subfolders...\n")
+    shell("mkdir -p jobs/all")
+    shell("mkdir -p jobs/makeDBcasOffinder")
+    shell("mkdir -p jobs/casOffinder")
+    shell("mkdir -p jobs/summaryOfftarget")
+    shell("mkdir -p jobs/extractNmer")
+    shell("mkdir -p jobs/calculateTscore")
+    shell("mkdir -p jobs/extractATACseqInsFreq")
+    shell("mkdir -p jobs/ilr_score_prepare_input")
+    shell("mkdir -p jobs/ilr_score_get_score")
+    shell("mkdir -p jobs/ilr_score_summary_outputs")
+    shell("mkdir -p jobs/tandem_repeat_length")
+    shell("mkdir -p jobs/TRL_summary_outputs")
+    shell("mkdir -p jobs/distance_to_TEL_CEN")
+    shell("mkdir -p jobs/extract_transcription_level")
+    shell("mkdir -p jobs/shuffle_genome_fasta")
+    shell("mkdir -p jobs/igr_score_prepare_input")
+    shell("mkdir -p jobs/igr_score_get_score")
+    shell("mkdir -p jobs/igr_score_summary")
+    shell("mkdir -p jobs/histone_modification")
+    shell("mkdir -p jobs/summary_HM")
+    shell("mkdir -p jobs/combineTables")
+
+rule all:
+    input:
+        RESULTDIR + "/" + "combined_features.txt",
+        RESULTDIR + "/off_target_list.txt",
+
+rule makeDBcasOffinder:
+    input:
+        config["genome"]
+    output:
+        os.path.dirname(os.path.abspath(config["genome"])) + "/casoffinder_db/ref_genome.fa"
+    threads: 1
+    shell:
+        "cp {input} {output}"
+
+rule casOffinder:
+    input:
+        genome = os.path.dirname(os.path.abspath(config["genome"])) + "/casoffinder_db/ref_genome.fa"
+    output:
+        tmpinput = temp(TMPDIR + "/" + "{sample}.casofftarget_input.txt"),
+        output = temp(TMPDIR + "/" + "{sample}.ot.txt")
+    threads: 1
+    params:
+        max_mismatch = 3,
+        gRNA = lambda wildcards: units.loc[wildcards.sample,"gRNA_sequence"],
+        genome_path = os.path.dirname(os.path.abspath(config["genome"])) + "/casoffinder_db/"
+    shell:
+        "touch {output.tmpinput} && echo \"{params.genome_path}\" > {output.tmpinput} && "
+        "echo \"NNNNNNNNNNNNNNNNNNNNNGG\" >> {output.tmpinput} && "
+        "echo \"{params.gRNA}NNN {params.max_mismatch}\" >> {output.tmpinput} && "
+        "cas-offinder {output.tmpinput} C {output.output}"
+
+rule summaryOfftarget:
+    input:
+        targetsheet = config["targetsheet"],
+        files = expand(TMPDIR + "/" + "{sample}.ot.txt",sample = SAMPLES)
+    output:
+        out1 = RESULTDIR + "/summaries/" + "off_target.txt",
+        out2 = RESULTDIR + "/off_target_list.txt"
+    params:
+        max_mismatch = 3,
+        workdir = TMPDIR
+    threads: 1
+    shell:
+        "./perl/summary_offtarget.pl -in {input.targetsheet} -workdir {params.workdir} -out {output.out1} -m {params.max_mismatch} -out2 {output.out2}"
+
+rule extractNmer:
+    input:
+        targetsheet = config["targetsheet"],
+        genome = config["genome"]
+    output:
+        RESULTDIR + "/summaries/" + "target_nmer.txt"
+    threads: 1
+    params:
+        length = 30
+    shell:
+        "./perl/extract_nmer.pl -in {input.targetsheet} -out {output} -l {params.length} -g {input.genome}"
+
+rule calculateTscore:
+    input:
+        targetsheet = config["targetsheet"]
+    output:
+        RESULTDIR + "/summaries/" + "t_score.txt"
+    threads: 1
+    run:
+        with open(output[0], 'w') as outfile:
+            outfile.write("#id" + '\t' + 'T_score' + '\n')
+            for id in SAMPLES:
+                guide = units.loc[id,"gRNA_sequence"]
+                T_score =  get_T_score(guide)
+                outfile.write(id + '\t' + str(T_score) + '\n')
+        outfile.close()
+
+rule extractATACseqInsFreq:
+    input:
+        targetsheet = config["targetsheet"],
+        bed = config["atac_seq_bed"]
+    output:
+        RESULTDIR + "/summaries/" + "atac_ins_freq.txt"
+    threads: 1
+    params:
+        window = 50
+    shell:
+        "./perl/extract_ATACseq_ins_freq.pl -in {input.targetsheet} -out {output} -w {params.window} -bed {input.bed}"
+
+rule ilr_score_prepare_input:
+    input:
+        targetsheet = config["targetsheet"],
+        genome = config["genome"]
+    output:
+        fa = temp(TMPDIR + "/" + "{sample}.ilr{window}.fa")
+    threads: 1
+    params:
+        chr = lambda wildcards: units.loc[wildcards.sample,"chr"],
+        coord = lambda wildcards: units.loc[wildcards.sample,"coord"],
+    shell:
+        "./perl/extract_fasta_target_window.pl -chr {params.chr} -coord {params.coord} -window {wildcards.window} -genome {input.genome} -id {wildcards.sample} -out {output.fa} "
+        
+
+rule ilr_score_get_score:
+    input:
+        fa = TMPDIR + "/" + "{sample}.ilr{window}.fa"
+    output:
+        out = temp(TMPDIR + "/" + "{sample}.ilr{window}.out")
+    threads: 1
+    params:
+        rseed =123
+    shell:
+        "./bin/ir64 -i {input.fa} -d -u -S {params.rseed} -o {output.out}"
+#        "./bin/ir -i {input.fa} -d -u -S {params.rseed} -o {output.out}"
+
+rule ilr_score_summary_outputs:
+    input:
+        ilrout = lambda wildcards: expand(TMPDIR + "/" + "{sample}.ilr" + wildcards.window + ".out",sample = SAMPLES),
+        targetsheet = config["targetsheet"]
+    output:
+        RESULTDIR + "/summaries/" + "ilr{window}.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR
+    shell:
+        "./perl/summary_ilr_score.pl -in {input.targetsheet} -workdir {params.workdir} -w {wildcards.window} -out {output}"
+
+rule tandem_repeat_length:
+    input:
+        targetsheet = config["targetsheet"],
+        genome = config["genome"]
+    output:
+        out = temp(TMPDIR + "/" + "{sample}.trl{window}x2.out")
+    threads: 1
+    params:
+        chr = lambda wildcards: units.loc[wildcards.sample,"chr"],
+        coord = lambda wildcards: units.loc[wildcards.sample,"coord"],
+        minM = 3,
+        maxMM = 1,
+        filM = 3
+    shell:
+        "./perl/tandem_repeats_length.pl -chr {params.chr} -coord {params.coord} -window {wildcards.window} -genome {input.genome} -minM {params.minM} -maxMM {params.maxMM} -filM {params.filM} -out {output.out}"
+
+rule TRL_summary_outputs:
+    input:
+        trlout = lambda wildcards: expand(TMPDIR + "/" + "{sample}.trl" + wildcards.window + "x2.out",sample = SAMPLES),
+        targetsheet = config["targetsheet"]
+    output:
+        RESULTDIR + "/summaries/" + "trl{window}x2.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR
+    shell:
+        "./perl/summary_trl.pl -in {input.targetsheet} -workdir {params.workdir} -w {wildcards.window} -out {output}"
+
+rule distance_to_TEL_CEN:
+    input:
+        genome_CEN = config["centromere_coords"],
+        targetsheet = config["targetsheet"]
+    output:
+        RESULTDIR + "/summaries/distance_to_tel_cen.txt"
+    threads: 1
+    shell:
+        "./perl/dist_centromere_telomere.pl -in {input.targetsheet} -out {output} -coord {input.genome_CEN}"
+
+rule extract_transcription_level:
+    input:
+        targetsheet = config["targetsheet"],
+        fw = config["transcription_forward_strand"],
+        rv = config["transcription_reverse_strand"]
+    output:
+        RESULTDIR + "/summaries/transcription.txt"
+    params:
+        window = 50
+    threads: 1
+    shell:
+        "./perl/extract_transcription_level.pl -in {input.targetsheet} -out {output} -forward {input.fw} -reverse {input.rv} -w {params.window}"
+
+rule shuffle_genome_fasta:
+    input:
+        genome = config["genome"]
+    output:
+        genome = config["genome"] + ".shuffled.fa"
+    threads: 1
+    shell:
+        "./perl/shuffle_genome.pl -in {input.genome} -out {output.genome}"
+
+rule igr_score_prepare_input:
+    input:
+        genome = "{prefix}"
+    output:
+        wordlib = "{prefix}.sus.bed"
+    threads: 1
+    params:
+        wordsize = 11,
+        localmaskbp = 5000
+    shell:
+        "./perl/calculate_igr_construct_sus_library.pl -in {input.genome} -out {output.wordlib} -min_word_size {params.wordsize} -mask_dist_offset {params.localmaskbp}"
+
+rule igr_score_get_score:
+    input:
+        targetsheet = config["targetsheet"],
+        genome = config["genome"] + ".sus.bed",
+        shuffle = config["genome"] + ".shuffled.fa.sus.bed"
+    output:
+         temp(TMPDIR + "/" + "{sample}.igr{window}.txt")
+    threads: 1
+    params:
+        chr = lambda wildcards: units.loc[wildcards.sample,"chr"],
+        coord = lambda wildcards: units.loc[wildcards.sample,"coord"]
+    shell:
+        "./perl/calculate_igr_get_score.pl -chr {params.chr} -coord {params.coord} -w {wildcards.window} -out {output} -bed_obs {input.genome} -bed_exp {input.shuffle}"
+
+rule igr_score_summary:
+    input:
+        igrout = lambda wildcards: expand(TMPDIR + "/" + "{sample}.igr" + wildcards.window + ".txt",sample = SAMPLES),
+        targetsheet = config["targetsheet"]
+    output:
+        RESULTDIR + "/summaries/" + "igr{window}.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR
+    shell:
+        "./perl/summary_igr_score.pl -in {input.targetsheet} -workdir {params.workdir} -w {wildcards.window} -out {output}"
+
+rule histone_modification:
+    input:
+        targetsheet = config["targetsheet"],
+        histmod = config["hist_mod_list"]
+    output:
+        temp(TMPDIR + "/" + "HM_{hm}.txt")
+    threads: 1
+    params:
+        bed1 = lambda wildcards: hist.loc[wildcards.hm,"signal"],
+        bed2 = lambda wildcards: hist.loc[wildcards.hm,"input"]
+    shell:
+        "./R/histone_modification_background_adjust.R -i {input.targetsheet} -b {params.bed1} -e {params.bed2} -o {output} -l {wildcards.hm}"
+
+rule summary_HM:
+    input:
+        histmod = config["hist_mod_list"],
+        hmout = expand(TMPDIR + "/" + "HM_{hm}.txt",hm = HISTMODS)
+    output:
+        RESULTDIR + "/summaries/" + "histone_modifications.txt"
+    threads: 1
+    params:
+        workdir = TMPDIR
+    shell:
+        "./R/summary_HM.R -i {input.histmod} -o {output} -w {params.workdir}"
+
+rule combineTables:
+    input:
+        RESULTDIR + "/summaries/" + "off_target.txt",
+        RESULTDIR + "/summaries/" + "target_nmer.txt",
+        RESULTDIR + "/summaries/" + "t_score.txt",
+        RESULTDIR + "/summaries/" + "atac_ins_freq.txt",
+        RESULTDIR + "/summaries/" + "distance_to_tel_cen.txt",
+        RESULTDIR + "/summaries/" + "transcription.txt",
+        RESULTDIR + "/summaries/" + "igr50.txt",
+        RESULTDIR + "/summaries/" + "igr100.txt",
+        RESULTDIR + "/summaries/" + "igr500.txt",
+        RESULTDIR + "/summaries/" + "igr1000.txt",
+        RESULTDIR + "/summaries/" + "igr5000.txt",
+        RESULTDIR + "/summaries/" + "igr10000.txt",
+        RESULTDIR + "/summaries/" + "ilr50.txt",
+        RESULTDIR + "/summaries/" + "ilr100.txt",
+        RESULTDIR + "/summaries/" + "ilr500.txt",
+        RESULTDIR + "/summaries/" + "ilr1000.txt",
+        RESULTDIR + "/summaries/" + "ilr5000.txt",
+        RESULTDIR + "/summaries/" + "ilr10000.txt",
+        RESULTDIR + "/summaries/" + "trl25x2.txt",
+        RESULTDIR + "/summaries/" + "trl50x2.txt",
+        RESULTDIR + "/summaries/" + "trl250x2.txt",
+        RESULTDIR + "/summaries/" + "trl500x2.txt",
+        RESULTDIR + "/summaries/" + "trl2500x2.txt",
+        RESULTDIR + "/summaries/" + "trl5000x2.txt",
+        RESULTDIR + "/summaries/" + "histone_modifications.txt"
+    output:
+        RESULTDIR + "/" + "combined_features.txt"
+    threads: 1
+    params:
+        input_dir = RESULTDIR + "/summaries/"
+    shell:
+        "./R/combine_tables.R -f {params.input_dir} -o {output}"

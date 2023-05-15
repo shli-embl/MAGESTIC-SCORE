@@ -1,0 +1,508 @@
+import os
+import pandas as pd
+
+configfile: "inputs/input.yaml"
+units = pd.read_table(config["samplesheet"], dtype=str).set_index(["sample"], drop=False)
+SAMPLES = units.index.get_level_values('sample').unique().tolist()
+TMPDIR = config["tmp_dir"]
+RESULTDIR = config["output_dir"]
+
+def get_read1(wildcards):
+    if len(units.loc[wildcards.sample,"read1fq"].split(";"))==1:
+        return units.loc[wildcards.sample,"read1fq"]
+    else:
+        return units.loc[wildcards.sample,"read1fq"].split(";")[int(wildcards.subfile)]
+
+def get_read2(wildcards):
+    if len(units.loc[wildcards.sample,"read2fq"].split(";"))==1:
+        return units.loc[wildcards.sample,"read2fq"]
+    else:
+        return units.loc[wildcards.sample,"read2fq"].split(";")[int(wildcards.subfile)]
+
+def get_bam(wildcards):
+    if len(units.loc[wildcards.sample,"read1fq"].split(";"))==1:
+        return TMPDIR + "/" + wildcards.sample + ".part0.sort.bam"
+    else:
+        return expand(TMPDIR + "/" + wildcards.sample + ".part{subfile}.sort.bam",subfile = list(range(0,len(units.loc[wildcards.sample,"read1fq"].split(";")))))
+
+def rchop(s, suffix):
+    if suffix and s.endswith(suffix):
+        return s[:-len(suffix)]
+    return s
+
+onstart:
+    print("##### Creating profile pipeline #####\n") 
+    print("\t Creating jobs output subfolders...\n")
+    shell("mkdir -p jobs/all")
+    shell("mkdir -p jobs/indexgenome")
+    shell("mkdir -p jobs/cutadapt")
+    shell("mkdir -p jobs/bwamem")
+    shell("mkdir -p jobs/sortbam")
+    shell("mkdir -p jobs/markduplicate")
+    shell("mkdir -p jobs/indexbam_result")
+    shell("mkdir -p jobs/indexbam_temp")
+    shell("mkdir -p jobs/indexfasta")
+    shell("mkdir -p jobs/BQSR")
+    shell("mkdir -p jobs/generateMapStats")
+    shell("mkdir -p jobs/cleanDonorReads")
+    shell("mkdir -p jobs/HaplotypeCallerTarget")
+    shell("mkdir -p jobs/HaplotypeCallerGenome")
+    shell("mkdir -p jobs/extractMappedReads")
+    shell("mkdir -p jobs/SVABA")
+    shell("mkdir -p jobs/summarySV")
+    shell("mkdir -p jobs/summarySVofftar")
+    shell("mkdir -p jobs/summaryStats")
+    shell("mkdir -p jobs/summaryOnTarget")
+    shell("mkdir -p jobs/makebed")
+    shell("mkdir -p jobs/bedcov")
+    shell("mkdir -p jobs/makeCoverageMatrix")
+    shell("mkdir -p jobs/normalizeCoverageMatrix")
+    shell("mkdir -p jobs/normalizeCoverageMatrixOfftar")
+    shell("mkdir -p jobs/summaryOnTargetReadCount")
+    shell("mkdir -p jobs/JointCalling")
+    shell("mkdir -p jobs/gzvcf")
+    shell("mkdir -p jobs/combineVCFs")
+    shell("mkdir -p jobs/VariantFiltration")
+    shell("mkdir -p jobs/extractSingleton")
+    shell("mkdir -p jobs/combineVariants")
+    shell("mkdir -p jobs/editDistance")
+    shell("mkdir -p jobs/snpCheckOfftar")
+    shell("mkdir -p jobs/depthOfftar")
+
+rule all:
+    input:
+        RESULTDIR + "/summaries/" + "on_target_precall.txt",
+        RESULTDIR + "/summaries/" + "on_target_coverage.txt",
+        RESULTDIR + "/summaries/" + "on_target_precall.txt.vars.txt",
+        RESULTDIR + "/summaries/" + "SV_calling_by_SVABA.txt",
+        RESULTDIR + "/summaries/" + "offtar_SV_calling_by_SVABA.txt",
+        RESULTDIR + "/summaries/" + "mapping_stats.txt",
+        RESULTDIR + "/summaries/" + "on_target_CNV.w500.s250.txt",
+        RESULTDIR + "/summaries/" + "off_target_CNV.w500.s250.txt",
+        RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.combine.edit_dist.txt",
+        RESULTDIR + "/summaries/" + "offtar_snp.txt",
+        RESULTDIR + "/summaries/" + "offtar_depth.txt"
+
+rule indexgenome:
+    input:
+        config["genome"]
+    output:
+        config["genome"] + ".bwt"
+    threads: 1
+    shell:
+        "bwa index {input}"
+
+rule cutadapt:
+    input:
+        read1 = get_read1,
+        read2 = get_read2
+    output:
+        read1 = temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.r1.fastq"),
+        read2 = temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.r2.fastq")
+    threads: 8
+    params:
+        adapters = "-g AGATGTGTATAAGAGACAG -G AGATGTGTATAAGAGACAG -a CTGTCTCTTATACACATCT -A CTGTCTCTTATACACATCT -g TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG -G TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG -a CTGTCTCTTATACACATCTGACGCTGCCGACGA -A CTGTCTCTTATACACATCTGACGCTGCCGACGA -g GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG -G GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG -a CTGTCTCTTATACACATCTCCGAGCCCACGAGAC -A CTGTCTCTTATACACATCTCCGAGCCCACGAGAC "
+    shell:
+        "cutadapt {params.adapters} -j {threads} -o {output.read1} -p {output.read2} -q 20 --trim-n -m 20 --max-n=0 {input.read1} {input.read2}"
+
+rule bwamem:
+    input:
+        read1 = TMPDIR + "/" + "{sample}.part{subfile}.r1.fastq",
+        read2 = TMPDIR + "/" + "{sample}.part{subfile}.r2.fastq",
+        genome = config["genome"],
+        index = config["genome"] + ".bwt" 
+    output:
+        temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.bam")
+    threads: 8
+    shell:
+        "bwa mem -t {threads} {input.genome} -R \"@RG\\tID:{wildcards.sample}.{wildcards.subfile}\\tSM:{wildcards.sample}\\tPL:illumina\\tLB:{wildcards.sample}\\tPU:{wildcards.sample}.{wildcards.subfile}\" {input.read1} {input.read2} | samtools view -bS > {output}"
+
+rule sortbam:
+    input:
+        TMPDIR + "/" + "{sample}.part{subfile}.bam",
+    output:
+        temp(TMPDIR + "/" + "{sample}.part{subfile,[0-9]}.sort.bam")
+    threads: 1
+    shell:
+        "gatk SortSam -I {input} -O {output} -SO coordinate --VALIDATION_STRINGENCY SILENT"
+
+rule markduplicate:
+    input:
+        get_bam
+    output:
+        bam = temp(TMPDIR + "/" + "{sample}.sort.dedup.bam"),
+        metrics = temp(TMPDIR + "/" + "{sample}.metrics")
+    threads: 1
+    params:
+        lambda wildcards: " ".join(expand(" -I {inputs} ",inputs = get_bam(wildcards)))
+    shell:
+        "gatk MarkDuplicates {params} -O {output.bam} -M {output.metrics} --VALIDATION_STRINGENCY SILENT"
+
+rule indexbam_result:
+    input:
+        RESULTDIR + "/bam/" + "{sample}.bam"
+    output:
+        RESULTDIR + "/bam/" + "{sample}.bam.bai"
+    threads: 1
+    shell:
+        "samtools index {input}"
+
+rule indexbam_temp:
+    input:
+        TMPDIR + "/" + "{sample}.bam"
+    output:
+        temp(TMPDIR + "/" + "{sample}.bam.bai")
+    threads: 1
+    shell:
+        "samtools index {input}"
+
+rule indexfasta:
+    input:
+        config["genome"]
+    output:
+        config["genome"] + ".fai",
+        rchop(rchop(rchop(config["genome"],".gz"),".fasta"),".fa") + ".dict"
+    threads: 1
+    shell:
+        "samtools faidx {input} && "
+        "gatk CreateSequenceDictionary -R {input}"
+
+rule BQSR:
+    input:
+        bam = TMPDIR + "/" + "{sample}.sort.dedup.bam",
+        bai = TMPDIR + "/" + "{sample}.sort.dedup.bam.bai",
+        genome = config["genome"],
+        fai = config["genome"] + ".fai",
+        dict = rchop(rchop(config["genome"],".fasta"),".fa") + ".dict"
+    output:
+        vcf1 = temp(TMPDIR + "/" + "{sample}.recal1.vcf"),
+        idx1 = temp(TMPDIR + "/" + "{sample}.recal1.vcf.idx"),
+        vcf2 = temp(TMPDIR + "/" + "{sample}.recal2.vcf"),
+        idx2 = temp(TMPDIR + "/" + "{sample}.recal2.vcf.idx"),
+        table1 = temp(TMPDIR + "/" + "{sample}.recal1.table"),
+        table2 = temp(TMPDIR + "/" + "{sample}.recal2.table"),
+        bam1 = temp(TMPDIR + "/" + "{sample}.sort.dedup.recal1.bam"),
+        bai1 = temp(TMPDIR + "/" + "{sample}.sort.dedup.recal1.bai"),
+        bam2 = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",
+        bai2 = temp(RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bai")
+    threads: 1
+    shell:
+        "gatk HaplotypeCaller -R {input.genome} -I {input.bam} -ploidy 1 -O {output.vcf1} && "
+        "gatk BaseRecalibrator -R {input.genome} -I {input.bam} -O {output.table1} --known-sites {output.vcf1} && "
+        "gatk ApplyBQSR -R {input.genome} -I {input.bam} -O {output.bam1} -bqsr {output.table1} && "
+        "gatk HaplotypeCaller -R {input.genome} -I {output.bam1} -ploidy 1 -O {output.vcf2} && "
+        "gatk BaseRecalibrator -R {input.genome} -I {output.bam1} -O {output.table2} --known-sites {output.vcf2} && "
+        "gatk ApplyBQSR -R {input.genome} -I {output.bam1} -O {output.bam2} -bqsr {output.table2}"
+
+rule generateMapStats:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam.bai"
+    output:
+        flagstat = RESULTDIR + "/stats/" + "{sample}.flagstat"
+    threads: 1
+    shell:
+        "samtools flagstat {input.bam} > {output.flagstat}"
+
+rule cleanDonorReads:
+    input:
+        RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam"
+    output:
+        bam = RESULTDIR + "/bam/" + "{sample}.clean.bam",
+        anno = RESULTDIR + "/bam/" + "{sample}.clean.bam.target_filtering.anno"
+    params:
+        chr = lambda wildcards: units.loc[wildcards.sample,"chr"],
+        start_coord = lambda wildcards: units.loc[wildcards.sample,"template_start_coordinate"],
+        end_coord = lambda wildcards: units.loc[wildcards.sample,"template_end_coordinate"]
+    threads: 1
+    shell:
+        "./perl/clean_donor_reads.pl -in {input} -out {output.bam} -chr {params.chr} -d_start {params.start_coord} -d_end {params.end_coord} -verbose"
+
+rule HaplotypeCallerTarget:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.clean.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.clean.bam.bai",
+        genome = config["genome"]
+    output:
+        gvcf = RESULTDIR + "/gvcf/" + "{sample}.target.g.vcf",
+        vcf = RESULTDIR + "/vcf/" + "{sample}.target.vcf"
+    params:
+        chr = lambda wildcards: units.loc[wildcards.sample,"chr"],
+        extend_region_start = lambda wildcards: int(units.loc[wildcards.sample,"template_start_coordinate"]) - 200,
+        extend_region_end = lambda wildcards: int(units.loc[wildcards.sample,"template_end_coordinate"]) + 200
+    threads: 1
+    shell:
+        "gatk HaplotypeCaller -R {input.genome} -I {input.bam} -O {output.gvcf} -ploidy 1 -ERC BP_RESOLUTION -L {params.chr}:{params.extend_region_start}-{params.extend_region_end} && "
+        "gatk GenotypeGVCFs -R {input.genome} -V {output.gvcf} -O {output.vcf}"
+
+rule HaplotypeCallerGenome:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.clean.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.clean.bam.bai",
+        genome = config["genome"]
+    output:
+        vcf = RESULTDIR + "/vcf/" + "{sample}.genome.vcf",
+        gvcf = temp(TMPDIR + "/" + "{sample}.genome.g.vcf")
+    threads: 1
+    shell:
+        "gatk HaplotypeCaller -R {input.genome} -I {input.bam} -O {output.vcf} -ploidy 1 && "
+        "gatk HaplotypeCaller -R {input.genome} -I {input.bam} -O {output.gvcf} -ploidy 1 -ERC GVCF"
+
+rule JointCalling:
+    input:
+        gvcfs = expand(TMPDIR + "/" + "{sample}.genome.g.vcf",sample = SAMPLES),
+        genome = config["genome"]
+    output:
+        vcf = TMPDIR + "/" + "allsamples.{chr}.vcf",
+        db = directory(TMPDIR + "/" + "allsamples.{chr}.vcf.tmp")
+    threads: 8
+    params:
+        variant = lambda wildcards: " ".join(expand(" --variant " + TMPDIR + "/{sample}.genome.g.vcf \\\n",sample = SAMPLES)),
+        tmpdir = TMPDIR
+    shell:
+        "gatk GenomicsDBImport -L {wildcards.chr} --genomicsdb-workspace-path {output.db} --tmp-dir {params.tmpdir} {params.variant} &&"
+        "gatk GenotypeGVCFs -R {input.genome} -V gendb://{output.db} -O {output.vcf} --tmp-dir {params.tmpdir} --max-alternate-alleles 4"
+
+rule gzvcf:
+    input:
+        vcf = "{sample}.vcf"
+    output:
+        gzvcf = "{sample}.vcf.gz",
+        tbi = "{sample}.vcf.gz.tbi"
+    threads: 1
+    shell:
+        "bgzip -c {input.vcf} > {output.gzvcf} && "
+        "tabix {output.gzvcf}"
+
+rule combineVCFs:
+    input:
+        vcf = expand(TMPDIR + "/" + "allsamples.chr{n}.vcf.gz",n = range(1,17)),
+        tbi = expand(TMPDIR + "/" + "allsamples.chr{n}.vcf.gz.tbi",n = range(1,17))
+    output:
+        vcf = temp(TMPDIR + "/allsample.allchr.vcf")
+    threads: 1
+    shell:
+        "vcf-concat {input.vcf} > {output.vcf}"
+
+rule VariantFiltration:
+    input:
+        vcf = TMPDIR + "/allsample.allchr.vcf"
+    output:
+        vcf = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.vcf"
+    threads: 1
+    shell:
+        "gatk VariantFiltration -V {input.vcf} -O {output.vcf} --filter-name lowQual --filter-expression \"QD < 2.0 || FS > 60.0 || MQ < 40.0 || SOR > 3.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0\""
+
+rule extractSingleton:
+    input:
+        vcf = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.vcf",
+        meta = config["samplesheet"]
+    output:
+        txt = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.txt",
+        ind = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.txt.excludedInds.txt",
+        site = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.txt.excludedSites.txt"
+    threads: 1
+    shell:
+        "./perl/generate_singleton_list.pl -in {input.meta} -out {output.txt} -vcf {input.vcf}"
+
+rule combineVariants:
+    input:
+        txt = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.txt"
+    output:
+        txt = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.combine.txt"
+    threads: 1
+    shell:
+        "./perl/combine_variants.pl -in {input.txt} -out {output.txt}"
+
+rule editDistance:
+    input:
+        txt = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.combine.txt",
+        genome = config["genome"],
+        meta = config["grna"]
+    output:
+        txt = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.singleton.combine.edit_dist.txt"
+    threads: 1
+    params:
+        win = 50
+    shell:
+        "./perl/edit_distance_at_variant.pl -in {input.meta} -out {output.txt} -g {input.genome} -w {params.win} -var {input.txt}"
+
+rule extractMappedReads:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.clean.bam"
+    output:
+        bam = temp(TMPDIR + "/" + "{sample}.clean.mapped.bam")
+    threads: 1
+    shell:
+        "samtools view -bF 4 {input.bam} > {output.bam}"
+
+rule SVABA:
+    input:
+        bam = TMPDIR + "/" + "{sample}.clean.mapped.bam",
+        bai = TMPDIR + "/" + "{sample}.clean.mapped.bam.bai",
+        genome = config["genome"]
+    output:
+        tmpdir = temp(directory(TMPDIR + "/" + "{sample}_other")),
+        indel_vcf = RESULTDIR + "/sv/vcf/" + "{sample}.svaba.indel.vcf",
+        sv_vcf = RESULTDIR + "/sv/vcf/" + "{sample}.svaba.sv.vcf",
+        unfil_indel_vcf = RESULTDIR + "/sv/unfil_vcf/" + "{sample}.svaba.unfiltered.indel.vcf",
+        unfil_sv_vcf = RESULTDIR + "/sv/unfil_vcf/" + "{sample}.svaba.unfiltered.sv.vcf"
+    threads: 8
+    shell:
+        "if [[ ! -e {output.tmpdir} ]]; then mkdir {output.tmpdir}; fi && "
+        "svaba run -G {input.genome} -p {threads} -a {output.tmpdir}/{wildcards.sample} -L 2 -I -t {input.bam} && "
+        "mv {output.tmpdir}/{wildcards.sample}.svaba.indel.vcf {output.indel_vcf} && "
+        "mv {output.tmpdir}/{wildcards.sample}.svaba.sv.vcf {output.sv_vcf} && "
+        "mv {output.tmpdir}/{wildcards.sample}.svaba.unfiltered.indel.vcf {output.unfil_indel_vcf} && "
+        "mv {output.tmpdir}/{wildcards.sample}.svaba.unfiltered.sv.vcf {output.unfil_sv_vcf}"
+
+rule summarySV:
+    input:
+        samplesheet = config["samplesheet"],
+        indel_vcfs = expand(RESULTDIR + "/sv/vcf/" + "{sample}.svaba.indel.vcf",sample = SAMPLES),
+        sv_vcfs = expand(RESULTDIR + "/sv/vcf/" + "{sample}.svaba.sv.vcf",sample = SAMPLES),
+        unfil_indel_vcfs = expand(RESULTDIR + "/sv/unfil_vcf/" + "{sample}.svaba.unfiltered.indel.vcf",sample = SAMPLES),
+        unfil_sv_vcfs = expand(RESULTDIR + "/sv/unfil_vcf/" + "{sample}.svaba.unfiltered.sv.vcf",sample = SAMPLES)
+    output:
+        RESULTDIR + "/summaries/" + "SV_calling_by_SVABA.txt"
+    threads: 1
+    params:
+        window = 5000
+    shell:
+        "./perl/extract_svaba_results.pl -in {input.samplesheet} -dir " + RESULTDIR + "/sv/" + " -out {output} -w {params.window}"
+
+rule summarySVofftar:
+    input:
+        samplesheet = config["offtar"],
+        indel_vcfs = expand(RESULTDIR + "/sv/vcf/" + "{sample}.svaba.indel.vcf",sample = SAMPLES),
+        sv_vcfs = expand(RESULTDIR + "/sv/vcf/" + "{sample}.svaba.sv.vcf",sample = SAMPLES),
+        unfil_indel_vcfs = expand(RESULTDIR + "/sv/unfil_vcf/" + "{sample}.svaba.unfiltered.indel.vcf",sample = SAMPLES),
+        unfil_sv_vcfs = expand(RESULTDIR + "/sv/unfil_vcf/" + "{sample}.svaba.unfiltered.sv.vcf",sample = SAMPLES)
+    output:
+        RESULTDIR + "/summaries/" + "offtar_SV_calling_by_SVABA.txt"
+    threads: 1
+    params:
+        window = 5000
+    shell:
+        "./perl/extract_svaba_results_offtar.pl -in {input.samplesheet} -dir " + RESULTDIR + "/sv/" + " -out {output} -w {params.window}"
+
+rule summaryStats:
+    input:
+        samplesheet = config["samplesheet"],
+        bams = expand(RESULTDIR + "/bam/" + "{sample}.clean.bam",sample = SAMPLES),
+        flagstats = expand(RESULTDIR + "/stats/" + "{sample}.flagstat",sample = SAMPLES)
+    output:
+        RESULTDIR + "/summaries/" + "mapping_stats.txt"
+    params:
+        workdir = RESULTDIR
+    threads: 1
+    shell:
+        "./perl/summary_stats.pl -in {input.samplesheet} -workdir {params.workdir} -out {output}"
+
+rule summaryOnTarget:
+    input:
+        samplesheet = config["samplesheet"],
+        genome = config["genome"],
+        vcfs = expand(RESULTDIR + "/vcf/" + "{sample}.target.vcf",sample = SAMPLES),
+        gvcfs = expand(RESULTDIR + "/gvcf/" + "{sample}.target.g.vcf",sample = SAMPLES)
+    output:
+        out = RESULTDIR + "/summaries/" + "on_target_precall.txt",
+        var = RESULTDIR + "/summaries/" + "on_target_precall.txt.vars.txt"
+    threads: 1
+    params:
+        extend_bp = 200,
+        workdir = RESULTDIR
+    shell:
+        "./perl/precalling_target_outcome.pl -in {input.samplesheet} -workdir {params.workdir} -genome {input.genome} -out {output.out} -donor_ext {params.extend_bp}"
+
+rule summaryOnTargetReadCount:
+    input:
+        samplesheet = config["samplesheet"],
+        bams1 = expand(RESULTDIR + "/bam/" + "{sample}.clean.bam",sample = SAMPLES),
+        bams2 = expand(RESULTDIR + "/bam/" + "{sample}.sort.dedup.recal2.bam",sample = SAMPLES)
+    output:
+        out = RESULTDIR + "/summaries/" + "on_target_coverage.txt"
+    threads: 1
+    params:
+        workdir = RESULTDIR
+    shell:
+        "./perl/summary_on_target_read_counts.pl -in {input.samplesheet} -out {output.out} -workdir {params.workdir}"
+
+rule makebed:
+    input:
+        genome = config["genome"],
+        fai = config["genome"] + ".fai"
+    output:
+        genome = temp(config["genome"] + ".w{window}.s{step}.genome"),
+        bed = config["genome"] + ".genome.w{window}.s{step}.bed"
+    threads: 1
+    shell:
+        "awk -v OFS='\\t' {{'print $1,$2'}} {input.fai} > {output.genome} && "
+        "bedtools makewindows -g {output.genome} -w {wildcards.window} -s {wildcards.step} > {output.bed}"
+
+rule bedcov:
+    input:
+        bam = RESULTDIR + "/bam/" + "{sample}.clean.bam",
+        bai = RESULTDIR + "/bam/" + "{sample}.clean.bam.bai",
+        bed = config["genome"] + ".genome.w{window}.s{step}.bed"
+    output:
+        bed = temp(TMPDIR + "/" + "{sample}.sample.w{window}.s{step}.bed")
+    threads: 1
+    shell:
+        "samtools bedcov {input.bed} {input.bam} > {output.bed}"
+
+rule makeCoverageMatrix:
+    input:
+        beds = lambda wildcards: expand(TMPDIR + "/" + "{sample}.sample.w" + wildcards.window + ".s" + wildcards.step + ".bed",sample = SAMPLES),
+        samplesheet = config["samplesheet"]
+    output:
+        temp(TMPDIR + "/" + "WindowCoverage.raw.w{window}.s{step}.txt")
+    params:
+        workdir = TMPDIR
+    threads: 1
+    shell:
+        "./R/merge_beds.R -i {input.samplesheet} -f {params.workdir} -w {wildcards.window} -s {wildcards.step} -o {output}"
+
+rule normalizeCoverageMatrix:
+    input:
+        bed = TMPDIR + "/" + "WindowCoverage.raw.w{window}.s{step}.txt",
+        samplesheet = config["samplesheet"]
+    output:
+        txt = RESULTDIR + "/summaries/" + "on_target_CNV.w{window}.s{step}.txt"
+    threads: 1
+    shell:
+        "./R/normalize_coverage_matrix.R -b {input.bed} -i {input.samplesheet} -w {wildcards.window} -s {wildcards.step} -o {output.txt}"
+
+rule normalizeCoverageMatrixOfftar:
+    input:
+        bed = TMPDIR + "/" + "WindowCoverage.raw.w{window}.s{step}.txt",
+        samplesheet = config["offtar"]
+    output:
+        txt = RESULTDIR + "/summaries/" + "off_target_CNV.w{window}.s{step}.txt"
+    threads: 1
+    shell:
+        "./R/normalize_coverage_matrix.R -b {input.bed} -i {input.samplesheet} -w {wildcards.window} -s {wildcards.step} -o {output.txt}"
+
+rule snpCheckOfftar:
+    input:
+        meta = config["offtar"],
+        vcf = RESULTDIR + "/joint_vcf/" + "allsample.allchr.fil.vcf"
+    output:
+        RESULTDIR + "/summaries/" + "offtar_snp.txt"
+    threads: 1
+    params:
+        window = 400
+    shell:
+        "./perl/check_off_target.pl -in {input.meta} -vcf {input.vcf} -w {params.window} -out {output}"
+
+rule depthOfftar:
+    input:
+        meta = config["offtar"],
+        bams = expand(RESULTDIR + "/bam/" + "{sample}.clean.bam",sample = SAMPLES)
+    output:
+        RESULTDIR + "/summaries/" + "offtar_depth.txt"
+    threads: 1
+    params:
+        workdir = RESULTDIR
+    shell:
+        "./perl/calculate_depth_off_target.pl -in {input.meta} -out {output} -workdir {params.workdir}"
