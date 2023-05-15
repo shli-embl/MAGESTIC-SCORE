@@ -2,12 +2,22 @@
 ## A genome-wide annotation of difficult-to-edit regions based on MAGESTIC and SCORE
 
 ### Install conda environment
-Install conda environment using MAMBA (recommended) or CONDA:
+Install conda environment using CONDA (replace {myenv_name} with the name of environment to create):
 ```
 git clone https://github.com/shli-embl/MAGESTIC-SCORE.git
 cd MAGESTIC-SCORE/
-mamba install -f envs/environment.yaml -p envs/myenv
+conda env create -f envs/environment.yaml -p envs/{myenv_name}
 ```
+Or using MAMBA (recommended):
+```
+mamba env create -f envs/environment.yaml -p envs/{myenv_name}
+```
+
+Then, activate the environment before running the snakemake pipelines:
+```
+conda activate envs/{myenv_name}
+```
+
 ### Snakemake pipelines
 #### pipeline 1: Single clonal whole-genome sequencing data analysis and editing outcome (pre-)calling
 #### pipeline 2: Target site sequence and genomic feature annotations
