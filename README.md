@@ -28,15 +28,35 @@ The single clonal WGS analysis pipeline takes in .fastq read files from multiple
 cd 1_outcome_precalling
 ls inputs/
 ```
-file 1. gRNA_list.txt: 
+file 1. gRNA_list.txt (sample id and gRNA sequence): 
 ```
-\#column 1: sample id, column 2: gRNA sequence
 MAGESTIC_REDI_1	CTCCTCAGTTTGTCCACGGT
 MAGESTIC_REDI_10	AGAGGAAGTCTCAACGGCAG
 MAGESTIC_REDI_100	ATACTGGCCACGTTTGACAA
 MAGESTIC_REDI_1000	TTGTGATTTTATTGATTCTG
 MAGESTIC_REDI_1001	GGTAACAAAGTCACGGCTCC
 ...
+```
+file 2. input.yaml (required by snakemake for locating file paths
+```
+---
+samplesheet: 'inputs/samples.txt'
+grna: 'inputs/gRNA_list.txt'
+genome: 'inputs/fasta/yeast_reference.fa'
+tmp_dir: './tmpdir'
+output_dir: './output'
+offtar: 'inputs/off_target.txt'
+```
+file 3. samples.txt (sample information, read file paths, with header)
+```
+sample	read1fq	read2fq	chr	strand	PAM_coordinate	variant_coordinate	template_start_coordinat
+e	template_end_coordinate	reference_allele	mutation_allele	template_sequence	target_m
+utations	synthetic_errors
+MAGESTIC_REDI_1	/g/steinmetz/incoming/solexa/2018-10-24-HCW3HAFXY/HCW3HAFXY_CST85_18s005308-1-1_Szu-Tu_l
+ane1012AA1_1_sequence.txt.gz	/g/steinmetz/incoming/solexa/2018-10-24-HCW3HAFXY/HCW3HAFXY_CST85_18s005
+308-1-1_Szu-Tu_lane1012AA1_2_sequence.txt.gz	chr8	-	104423	104423	104371	104479	CCCA	
+ACCC	TGGCTGCTATCGTTGAAATTATCGACCAAAAGAAGGTATGTTGAACCTAAAAACCCCCGTGGACAAACTGAGGAGGAAATTGTAAGGAAGAGAAAG
+TCCCCGTATGTTC	chr8_104423_C_to_A,chr8_104426_A_to_C
 ```
 
 #### Pipeline 2: Target site sequence and genomic feature annotations
