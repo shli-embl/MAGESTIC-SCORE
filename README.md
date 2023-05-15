@@ -21,7 +21,7 @@ conda activate envs/{myenv_name}
 ```
 
 ### Snakemake pipelines
-#### Pipeline 1: Single clonal whole-genome sequencing data analysis and editing outcome (pre-)calling
+### Pipeline 1: Single clonal whole-genome sequencing data analysis and editing outcome (pre-)calling
 The single clonal WGS analysis pipeline takes in .fastq read files from multiple Cas9 edited strains isolated from cell pool created by MAGESTIC, so that each single genome contains a barcode linked to a pre-designed gRNA-donor-DNA pair to introduce a variant on the target locus. The pipeline contains read processing and on-target genotyping (both for SNV/indel detection via GATK4 and SV detection via a 3-in-1 pre-selection approach). The SV pre-scan includes GATK4 (to detect unintended SNV/indels proximate to the target), SvABA and CNV detection. We also extended the outcome analysis to a list of off-target loci predicted by edit-distance from the on-target sequence. 
 #### 1a. Modify the configuration files
 ```
@@ -79,7 +79,7 @@ snakemake --profile profile
 ```
 
 
-#### Pipeline 2: Target site sequence and genomic feature annotations
+### Pipeline 2: Target site sequence and genomic feature annotations
 For a given list of PAM sites (and gRNA sequences), our pipeline 2 outputs a full list of annotations that are used for constructing the predictive model used in Pipeline 3. These annotations includes target sequence features, chromatin accessibility, histone modification, as well as the customized sequence repetitiveness metrics (and more details about feature list can be found in our publication). 
 #### 1a. Prepare annotation files
 Run the script to download pre-processed annotation files for the SCORE model (yeast chromatin, histone modification data). Please find the information about how the processed data were generated from 2_target_list_annotation/readmeplease.txt. 
@@ -122,5 +122,5 @@ cd 2_target_list_annotation/
 snakemake --profile profile
 ```
 
-#### Pipeline 3: Machine learning model construction and tuning
-#### Pipeline 4: Bulk whole-genome sequencing analysis for structral variant characterizations
+### Pipeline 3: Machine learning model construction and tuning
+### Pipeline 4: Bulk whole-genome sequencing analysis for structral variant characterizations
