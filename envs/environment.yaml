@@ -15,6 +15,7 @@ dependencies:
   - bedtools>=2.22
   - r-base>=4.0
   - r-ggplot2
+  - r-hexbin
   - r-optparse
   - r-caret
   - r-gbm
