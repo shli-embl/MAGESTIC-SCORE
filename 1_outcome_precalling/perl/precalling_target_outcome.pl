@@ -372,7 +372,7 @@ while(my $read_line=<INDEX>)
 						my $if_called=0;
 						while(($i>0)&&(!$if_called))
 						{
-							if($pos_donor_called[$called_pos]=="called")
+							if($pos_donor_called[$called_pos] eq "called")
 							{
 								$if_called=1;
 							}
@@ -394,7 +394,7 @@ while(my $read_line=<INDEX>)
 						my $if_called=0;
 						while(($i>0)&&(!$if_called))
 						{
-							if($pos_donor_called[$called_pos]=="called")
+							if($pos_donor_called[$called_pos] eq "called")
 							{
 								$if_called=1;
 							}
@@ -452,7 +452,7 @@ while(my $read_line=<INDEX>)
 						my $if_called=0;
 						while(($i>0)&&(!$if_called))
 						{
-							if($pos_donor_called[$called_pos]=="called")
+							if($pos_donor_called[$called_pos] eq "called")
 							{
 								$if_called=1;
 							}
