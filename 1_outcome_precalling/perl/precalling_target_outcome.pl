@@ -402,12 +402,12 @@ while(my $read_line=<INDEX>)
 							$i--;
 						}
 						#if it's a new spontaneous variant, report it as less confident call
-						if(!$if_called)
-						{
-							$spontaneous_variants{"(LC)".$v_id}=$e2."->".$e1;
-							print $v_id,"\n";
-					#		$spontaneous_variants_pos_sorting{"(LC)".$v_id}=$v_pos;
-						}
+      						#Updated on June 19, 2025: stopped reporting LC spontaneous variants as they are easily confused with sequencing errors. LC variants can be useful for calling synthetic errors and designed variants, as the chance for sequencing error to match them is low. 
+						#if(!$if_called)
+						#{
+						#	$spontaneous_variants{"(LC)".$v_id}=$e2."->".$e1;
+						#	$spontaneous_variants_pos_sorting{"(LC)".$v_id}=$v_pos;
+						#}
 					}
 					
 				}
@@ -460,12 +460,13 @@ while(my $read_line=<INDEX>)
 							$i--;
 						}
 						#if it's a new spontaneous variant, report it as less confident call
-						if(!$if_called)
-						{
-							$spontaneous_variants{"(LC)".$v_id}=$e2."->".$e1;
-							print $v_id,"\n";
-							#$spontaneous_variants_pos_sorting{"(LC)".$v_id}=$v_pos;
-						}
+						#Updated on June 19, 2025: stopped reporting LC spontaneous variants as they are easily confused with sequencing errors. LC variants can be useful for calling synthetic errors and designed variants, as the chance for sequencing error to match them is low. 
+						#if(!$if_called)
+						#{
+						#	$spontaneous_variants{"(LC)".$v_id}=$e2."->".$e1;
+						#	print $v_id,"\n";
+						#	#$spontaneous_variants_pos_sorting{"(LC)".$v_id}=$v_pos;
+						#}
 					}
 					
 				}
